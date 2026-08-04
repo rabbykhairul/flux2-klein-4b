@@ -74,7 +74,8 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
  && uv pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL} \
  && python -c "import torch, torchvision, torchaudio; \
     [__import__('sys').exit(f'{m.__name__} {m.__version__}') for m in (torch, torchvision, torchaudio) \
-     if m.__version__.split('+')[-1] != '${TORCH_CUDA_CHANNEL}']"
+     if m.__version__.split('+')[-1] != '${TORCH_CUDA_CHANNEL}']" \
+ && uv cache clean
 
 # Support for the network volume
 ADD src/extra_model_paths.yaml /comfyui/
@@ -141,6 +142,7 @@ ENV NVIDIA_REQUIRE_CUDA="cuda>=${REQUIRE_CUDA}"
 # image tolerates the flag only because its cache-from hits and the model layer never
 # rebuilds — a cold build has to actually download, and then it dies.
 ENV HF_XET_HIGH_PERFORMANCE=0
+ENV HF_HUB_DISABLE_XET=1
 
 # Stamp build version for runtime identification
 ENV BUILD_VERSION=${BUILD_VERSION}
@@ -158,7 +160,8 @@ ARG HF_TOKEN=""
 RUN HF_TOKEN="${HF_TOKEN}" /usr/local/bin/check-models.sh \
     && test -f /comfyui/models/diffusion_models/flux-2-klein-4b.safetensors \
     && test -f /comfyui/models/clip/qwen_3_4b_fp4_flux2.safetensors \
-    && test -f /comfyui/models/vae/flux2-vae.safetensors
+    && test -f /comfyui/models/vae/flux2-vae.safetensors \
+    && rm -rf /root/.cache/huggingface /root/.cache/uv
 
 # handler.py is copied LAST — after the model bake — so a handler-only change reuses the
 # cached model layers instead of re-baking them, and RunPod only re-pulls this
