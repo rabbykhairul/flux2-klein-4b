@@ -1,0 +1,10 @@
+{
+  "input": {
+    "prompt": "Change the background to a sunset beach while keeping the person in the foreground",
+    "image": "base64_encoded_source_image_data_here",
+    "reference_image": "base64_encoded_reference_image_here",
+    "seed": 42,
+    "steps": 4,
+    "negative_prompt": ""
+  }
+}
