@@ -5,8 +5,6 @@
     "seed": 42,
     "steps": 4,
     "negative_prompt": "",
-    "shift": 3.1,
-    "sampler": "euler",
-    "scheduler": "simple"
+    "sampler": "euler"
   }
 }
