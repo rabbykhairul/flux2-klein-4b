@@ -29,11 +29,20 @@ jobs:
           swap-storage: true
           docker-images: true
 
-      - name: Move Docker storage to /mnt
+      # BuildKit stages cache blobs under TMPDIR, which defaults to /tmp on the small root
+      # filesystem — moving Docker's data-root alone does not cover it. Both cold builds of
+      # this repo died with "No space left on device" on a root path while /mnt sat mostly
+      # empty, and the runner filled up hard enough that it could not upload its own logs.
+      - name: Move Docker storage and temp to /mnt
         run: |
-          sudo mkdir -p /mnt/docker
+          sudo mkdir -p /mnt/docker /mnt/tmp
+          sudo chmod 1777 /mnt/tmp
           echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
+          echo "TMPDIR=/mnt/tmp" >> "$GITHUB_ENV"
+
+      - name: Disk before build
+        run: df -h / /mnt
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -55,7 +64,17 @@ jobs:
           push: true
           provenance: false
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+          # mode=min, not max. mode=max stages and uploads every intermediate layer, which on
+          # a cold build means the whole torch and ComfyUI chain on top of the final image.
+          # The production repo tolerates max only because its cache-from hits and those
+          # layers are pulled rather than rebuilt; a repo with no cache yet has to materialise
+          # all of them at once. min exports just the final image's layers and still gives
+          # subsequent builds their reuse.
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=min
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+      - name: Disk after build
+        if: always()
+        run: df -h / /mnt
