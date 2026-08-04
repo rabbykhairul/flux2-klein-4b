@@ -133,8 +133,14 @@ RUN rm -rf /usr/local/cuda/compat
 ARG REQUIRE_CUDA=12.0
 ENV NVIDIA_REQUIRE_CUDA="cuda>=${REQUIRE_CUDA}"
 
-# Enable high-performance downloads from HuggingFace (hf_xet chunk-based parallel transfers).
-ENV HF_XET_HIGH_PERFORMANCE=1
+# hf_xet's high-performance mode is deliberately NOT enabled. It buffers parallel chunks in
+# memory, and on a 16 GB GitHub runner pulling a >7 GB model the kernel OOM-kills the
+# download ("Killed" from hf download, no traceback). check-models.sh then retries, and its
+# `rm -rf "$tmp_dir"` does not touch hf_xet's chunk cache under ~/.cache/huggingface/xet, so
+# each killed attempt leaves partial chunks behind until the disk fills too. The production
+# image tolerates the flag only because its cache-from hits and the model layer never
+# rebuilds — a cold build has to actually download, and then it dies.
+ENV HF_XET_HIGH_PERFORMANCE=0
 
 # Stamp build version for runtime identification
 ENV BUILD_VERSION=${BUILD_VERSION}
