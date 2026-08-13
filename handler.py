@@ -12,6 +12,7 @@ from PIL import Image
 
 MAX_SIDE = 1024
 MIN_SIDE = 256
+LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 
 _r2_client = None
 
@@ -59,18 +60,23 @@ def _decode_image(value, field):
 
 
 def _target_dims(image, megapixels):
-    """Mirror the reference Space: derive from the source image, snap to /8, clamp to 1024.
+    """Replicate the reference Space's calc_dimensions exactly.
 
-    Passing dimensions that are not multiples of 8 silently shifts the latent grid, and
-    anything past 1024 a side leaves the resolution band the model was validated in.
+    The long edge is pinned to 1024 — this upsamples a small input as readily as it
+    downsamples a large one, which is the behaviour the model was validated against, not a
+    clamp. Both sides then snap to a multiple of 8; off-grid dimensions silently shift the
+    latent packing. `megapixels` scales down from that baseline for cheaper jobs and has no
+    equivalent in the Space, so omitting it is what reproduces the validated path.
     """
-    w, h = image.size
+    iw, ih = image.size
+    aspect = iw / ih
+    if aspect >= 1:
+        w, h = float(MAX_SIDE), MAX_SIDE / aspect
+    else:
+        w, h = MAX_SIDE * aspect, float(MAX_SIDE)
     if megapixels:
-        scale = math.sqrt((megapixels * 1_000_000) / float(w * h))
+        scale = math.sqrt((megapixels * 1_000_000) / (w * h))
         w, h = w * scale, h * scale
-    longest = max(w, h)
-    if longest > MAX_SIDE:
-        w, h = w * MAX_SIDE / longest, h * MAX_SIDE / longest
     snap = lambda v: max(MIN_SIDE, min(MAX_SIDE, int(round(v / 8) * 8)))
     return snap(w), snap(h)
 
@@ -106,9 +112,17 @@ def validate_input(job_input):
 
     width, height = _target_dims(source, megapixels)
 
+    # Every image is resized to the same target before it reaches the pipeline, matching the
+    # Space. Handing the pipeline images of differing sizes leaves it to reconcile them
+    # itself, which is a different multi-image packing than the one that was validated.
+    resized = [
+        img.resize((width, height), LANCZOS)
+        for img in ([source] if reference is None else [source, reference])
+    ]
+
     return {
         "prompt": prompt,
-        "images": [source, reference] if reference is not None else source,
+        "images": resized[0] if len(resized) == 1 else resized,
         "steps": steps,
         "guidance_scale": float(
             job_input.get("guidance_scale", _env_float("KLEIN_GUIDANCE_SCALE", 1.0))
