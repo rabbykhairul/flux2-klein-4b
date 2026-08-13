@@ -1,9 +1,5 @@
 {
   "input": {
-    "prompt": "Dress the person in image 1 in the garment from image 2. Keep the person's face, body and pose unchanged.",
-    "image": "base64_encoded_person_image_here",
-    "reference_image": "base64_encoded_garment_image_here",
-    "seed": 42,
-    "steps": 4
+    "health_check": true
   }
 }

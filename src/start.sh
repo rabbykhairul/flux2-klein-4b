@@ -1,54 +1,28 @@
 #!/usr/bin/env bash
 
-echo "worker-comfyui: Build version ${BUILD_VERSION:-unknown}"
+echo "flux2-klein: Build version ${BUILD_VERSION:-unknown}"
 
-# SYMLINK MODEL DIRS TO NETWORK VOLUME IF PRESENT
-if [ -d /runpod-volume ]; then
-    echo "worker-comfyui: Network volume detected, symlinking model dirs to /runpod-volume/models"
-    for dir in diffusion_models clip vae loras controlnet; do
-        mkdir -p "/runpod-volume/models/$dir"
-        ln -sfn "/runpod-volume/models/$dir" "/comfyui/models/$dir"
-    done
-else
-    echo "worker-comfyui: No network volume detected, using local model storage"
-fi
+# Klein is step-wise distilled: Flux2KleinPipeline.do_classifier_free_guidance returns
+# `guidance_scale > 1 and not is_distilled`, so guidance never runs a second pass here and
+# the pipeline logs a warning if it is set above 1. Steps are therefore the only lever on
+# cost — 4 forward passes at the default, against Qwen's 3 through a model five times larger.
+: "${KLEIN_STEPS:=4}"
+: "${KLEIN_GUIDANCE_SCALE:=1.0}"
 
-# Download missing models via hf download (hf_xet chunk-based parallel transfers).
-# Runs in foreground so models are guaranteed ready before ComfyUI starts.
-echo "worker-comfyui: Validating models..."
-/usr/local/bin/check-models.sh
+# Weights are ~16 GB (7.75 transformer + 8.05 text encoder). That fits a 48 GB slice or a
+# 32 GB card outright; on 24 GB it is tight once 1 MP activations are added. Offload walks
+# text_encoder->transformer->vae so the encoder leaves VRAM before sampling, at the cost of
+# host-to-device transfers per job. Off by default; flip it per endpoint rather than
+# rebuilding when a smaller card is worth testing.
+: "${KLEIN_CPU_OFFLOAD:=0}"
 
-# Use libtcmalloc for better memory management
-TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\d" | head -n 1)"
-export LD_PRELOAD="${TCMALLOC}"
+# Any progress bar written from inside a sampling loop can block on log backpressure and
+# stall the step it is reporting on.
+: "${HF_HUB_DISABLE_PROGRESS_BARS:=1}"
+: "${TQDM_DISABLE:=1}"
 
-# Ensure ComfyUI-Manager runs in offline network mode inside the container
-comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-Manager network_mode" >&2
+export KLEIN_STEPS KLEIN_GUIDANCE_SCALE KLEIN_CPU_OFFLOAD \
+       HF_HUB_DISABLE_PROGRESS_BARS TQDM_DISABLE
 
-echo "worker-comfyui: Starting ComfyUI"
-
-# DEBUG emits one line per quantized op per sampling step — ~3,600 lines for a 4-step job,
-# logged from inside the sampling loop — and floods the console buffer hard enough to push
-# the boot output out of a captured log.
-: "${COMFY_LOG_LEVEL:=INFO}"
-
-# Extra ComfyUI launch flags, set per endpoint. Memory, attention and precision options
-# live here rather than baked in so they can be A/B tested from the console instead of
-# costing a rebuild plus fleet-wide FlashBoot snapshot invalidation each.
-: "${COMFY_EXTRA_ARGS:=}"
-
-# Unquoted on purpose: the value is a flag list and must word-split.
-# shellcheck disable=SC2086
-if [ "$SERVE_API_LOCALLY" == "true" ]; then
-    python -u /comfyui/main.py --disable-auto-launch --disable-metadata --listen --verbose "${COMFY_LOG_LEVEL}" --log-stdout ${COMFY_EXTRA_ARGS} &
-    echo $! > /tmp/comfyui.pid
-
-    echo "worker-comfyui: Starting RunPod Handler"
-    python -u /handler.py --rp_serve_api --rp_api_host=0.0.0.0
-else
-    python -u /comfyui/main.py --disable-auto-launch --disable-metadata --verbose "${COMFY_LOG_LEVEL}" --log-stdout ${COMFY_EXTRA_ARGS} &
-    echo $! > /tmp/comfyui.pid
-
-    echo "worker-comfyui: Starting RunPod Handler"
-    python -u /handler.py
-fi
+echo "flux2-klein: Starting RunPod handler"
+exec python -u /handler.py

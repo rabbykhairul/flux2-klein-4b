@@ -19,20 +19,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The baked image is ~48 GB; free the runner's preinstalled tooling and move
-      # Docker storage to the larger /mnt disk so the build doesn't run out of space.
+      # ~22 GB image against a ~14 GB runner disk, so both the tool-cache reclaim and the
+      # move to /mnt are load-bearing. Swap stays: reclaiming it leaves the weight bake with
+      # no headroom past physical RAM, which is what OOM'd the sibling Qwen worker's build.
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
           large-packages: true
-          swap-storage: true
+          swap-storage: false
           docker-images: true
 
-      # BuildKit stages cache blobs under TMPDIR, which defaults to /tmp on the small root
-      # filesystem — moving Docker's data-root alone does not cover it. Both cold builds of
-      # this repo died with "No space left on device" on a root path while /mnt sat mostly
-      # empty, and the runner filled up hard enough that it could not upload its own logs.
+      # BuildKit also stages cache blobs under TMPDIR, which defaults to /tmp on the small
+      # root filesystem — this repo's predecessor died with "No space left on device" on a
+      # root path while /mnt sat mostly empty. Both have to move, not just Docker.
       - name: Move Docker storage and temp to /mnt
         run: |
           sudo mkdir -p /mnt/docker /mnt/tmp
@@ -63,13 +63,11 @@ jobs:
           platforms: linux/amd64
           push: true
           provenance: false
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-          # mode=min, not max. mode=max stages and uploads every intermediate layer, which on
-          # a cold build means the whole torch and ComfyUI chain on top of the final image.
-          # The production repo tolerates max only because its cache-from hits and those
-          # layers are pulled rather than rebuilt; a repo with no cache yet has to materialise
-          # all of them at once. min exports just the final image's layers and still gives
-          # subsequent builds their reuse.
+          # mode=min, not max. max stages and uploads every intermediate layer, and on a cold
+          # cache that is what fills the runner rather than the image itself.
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=min
           tags: |
             ghcr.io/${{ github.repository }}:latest
