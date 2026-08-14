@@ -9,6 +9,12 @@ echo "flux2-klein: Build version ${BUILD_VERSION:-unknown}"
 : "${KLEIN_STEPS:=4}"
 : "${KLEIN_GUIDANCE_SCALE:=1.0}"
 
+# Prompt token budget. The pipeline truncates silently at this value, so an over-long prompt
+# is cut rather than refused. 512 is what the transformer trained against; the Qwen-era
+# prompt needs ~1536 to survive intact. padding="max_length" is unconditional, so raising
+# this lengthens the joint attention sequence on every job, not only long-prompt ones.
+: "${KLEIN_MAX_SEQ:=512}"
+
 # Weights are ~16 GB (7.75 transformer + 8.05 text encoder). That fits a 48 GB slice or a
 # 32 GB card outright; on 24 GB it is tight once 1 MP activations are added. Offload walks
 # text_encoder->transformer->vae so the encoder leaves VRAM before sampling, at the cost of
@@ -21,7 +27,7 @@ echo "flux2-klein: Build version ${BUILD_VERSION:-unknown}"
 : "${HF_HUB_DISABLE_PROGRESS_BARS:=1}"
 : "${TQDM_DISABLE:=1}"
 
-export KLEIN_STEPS KLEIN_GUIDANCE_SCALE KLEIN_CPU_OFFLOAD \
+export KLEIN_STEPS KLEIN_GUIDANCE_SCALE KLEIN_MAX_SEQ KLEIN_CPU_OFFLOAD \
        HF_HUB_DISABLE_PROGRESS_BARS TQDM_DISABLE
 
 echo "flux2-klein: Starting RunPod handler"

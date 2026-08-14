@@ -103,6 +103,16 @@ def validate_input(job_input):
     if not isinstance(steps, int) or not 1 <= steps <= 50:
         return None, "'steps' must be an integer between 1 and 50"
 
+    # The pipeline defaults to 512 and passes it to the tokenizer as max_length with
+    # truncation=True, so an over-long prompt is silently cut rather than rejected — the
+    # Qwen prompt this worker inherited runs ~1336 tokens and lost 62% of itself that way.
+    # Raising it is untested in both directions: the encoder handles 40960 tokens, but the
+    # transformer trained against 512, and padding="max_length" means every job pays for the
+    # larger sequence whether its prompt needs the room or not.
+    max_seq = job_input.get("max_sequence_length", _env_int("KLEIN_MAX_SEQ", 512))
+    if not isinstance(max_seq, int) or not 64 <= max_seq <= 4096:
+        return None, "'max_sequence_length' must be an integer between 64 and 4096"
+
     megapixels = job_input.get("megapixels")
     if megapixels is not None:
         try:
@@ -130,6 +140,7 @@ def validate_input(job_input):
         "seed": int(job_input.get("seed", 42)),
         "width": width,
         "height": height,
+        "max_sequence_length": max_seq,
     }, None
 
 
@@ -208,6 +219,7 @@ def handler(job):
         width=params["width"],
         num_inference_steps=params["steps"],
         guidance_scale=params["guidance_scale"],
+        max_sequence_length=params["max_sequence_length"],
         generator=generator,
     )
     generation_s = time.time() - t0
@@ -247,6 +259,7 @@ def handler(job):
             "width": params["width"],
             "height": params["height"],
             "seed": params["seed"],
+            "max_sequence_length": params["max_sequence_length"],
         },
     }
     if errors:
